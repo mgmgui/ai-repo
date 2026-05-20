@@ -1,0 +1,95 @@
+# ============================================================
+# L3 防线：AI PR 自动审查
+# 触发：PR 创建或更新时，调用 LLM 自动分析代码变更
+# 输出：以评论形式发布 AI 审查报告到 PR 页面
+# 权限：只读分析，写权限仅用于发评论
+# ============================================================
+name: AI PR 自动审查
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    branches: [main, develop]
+
+jobs:
+  ai-review:
+    name: AI 代码审查
+    runs-on: ubuntu-latest
+    # 草稿 PR 跳过 AI 审查，节省 API 成本
+    if: github.event.pull_request.draft == false
+    permissions:
+      contents: read        # 只读代码
+      pull-requests: write  # 写入审查评论
+
+    steps:
+      - name: Checkout 代码（完整历史用于 diff）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 获取 PR Diff
+        id: get-diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff $BASE_SHA $HEAD_SHA \
+            --diff-filter=ACMR \
+            -- '*.ts' '*.js' '*.json' \
+            > /tmp/pr.diff
+          DIFF_SIZE=$(wc -l < /tmp/pr.diff)
+          echo "diff_size=$DIFF_SIZE" >> $GITHUB_OUTPUT
+          echo "PR diff 行数: $DIFF_SIZE"
+
+      - name: 执行 AI 审查脚本
+        id: ai-review
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          DIFF_SIZE: ${{ steps.get-diff.outputs.diff_size }}
+        run: node scripts/ai-review.js
+
+      - name: 发布 AI 审查评论
+        uses: actions/github-script@v7
+        env:
+          REVIEW_RESULT: ${{ steps.ai-review.outputs.review_result }}
+        with:
+          script: |
+            const reviewResult = process.env.REVIEW_RESULT || '⚠️ AI 审查未返回结果';
+            
+            // 查找并更新已有的 AI 审查评论，避免重复发布
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.data.find(
+              c => c.user.type === 'Bot' && c.body.includes('<!-- AI-REVIEW-BOT -->')
+            );
+            
+            const body = `<!-- AI-REVIEW-BOT -->\n${reviewResult}`;
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
