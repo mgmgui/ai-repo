@@ -1,13 +1,23 @@
 # ============================================================
 # 低风险变更自动合并（chore/* 分支）
-# 触发条件：AI 审查通过 + CI 全绿 + 低风险类型
+# 触发条件：PR 标记 auto-merge-eligible + 安全阀通过
 # 覆盖范围：文档、测试、配置、依赖更新
+# 前置配置：
+#   1. Settings → General → Pull Requests → Allow auto-merge
+#   2. Settings → Actions → General → Allow GitHub Actions to create approvals
 # ============================================================
 name: 低风险变更自动合并
 
 on:
+  # 触发方式 1：PR 事件（标签变更、新建/更新）
   pull_request:
-    types: [labeled]
+    types: [labeled, opened, synchronize, ready_for_review]
+    branches: [main]
+
+  # 触发方式 2：CI workflow 完成时触发（关键！确保 CI 通过后能执行自动合并）
+  workflow_run:
+    workflows: ["CI - 代码质量验证"]
+    types: [completed]
     branches: [main]
 
 jobs:
@@ -15,22 +25,86 @@ jobs:
     name: 自动合并低风险 PR
     runs-on: ubuntu-latest
     # 仅当 PR 被标记为 auto-merge-eligible 时触发
-    if: contains(github.event.pull_request.labels.*.name, 'auto-merge-eligible')
+    if: >
+      github.event_name == 'workflow_run' ||
+      contains(github.event.pull_request.labels.*.name, 'auto-merge-eligible')
     permissions:
       contents: write
       pull-requests: write
+      actions: read
 
     steps:
+      - name: 获取 PR 信息（workflow_run 触发时）
+        uses: actions/github-script@v7
+        id: get-pr
+        if: github.event_name == 'workflow_run'
+        with:
+          script: |
+            // workflow_run 触发时，需要从 workflow run 中找到关联的 PR
+            const runId = context.payload.workflow_run.id;
+            const { data: pullRequests } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.payload.workflow_run.head_sha,
+            });
+            
+            const pr = pullRequests.find(p => 
+              p.base.ref === 'main' && p.state === 'open'
+            );
+            
+            if (!pr) {
+              console.log('未找到关联的开放 PR，跳过');
+              return '';
+            }
+            
+            // 检查是否带有 auto-merge-eligible 标签
+            const hasLabel = pr.labels.some(l => l.name === 'auto-merge-eligible');
+            if (!hasLabel) {
+              console.log('PR 没有 auto-merge-eligible 标签，跳过');
+              return '';
+            }
+            
+            // 检查 CI 是否成功
+            if (context.payload.workflow_run.conclusion !== 'success') {
+              console.log('CI 未通过，跳过自动合并');
+              return '';
+            }
+            
+            console.log(`找到 PR #${pr.number}，准备自动合并`);
+            return String(pr.number);
+          result-encoding: string
+
+      - name: 设置 PR 号
+        id: pr-info
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            PR_NUMBER="${{ steps.get-pr.outputs.result }}"
+            if [ -z "$PR_NUMBER" ]; then
+              echo "skip=true" >> $GITHUB_OUTPUT
+              echo "pr_number=" >> $GITHUB_OUTPUT
+            else
+              echo "skip=false" >> $GITHUB_OUTPUT
+              echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            fi
+          else
+            # pull_request 事件直接使用
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: 检查 PR 变更范围（安全阀）
+        if: steps.pr-info.outputs.skip == 'false'
         uses: actions/github-script@v7
         id: safety-check
         with:
           script: |
+            const prNumber = Number('${{ steps.pr-info.outputs.pr_number }}');
+            
             // 获取 PR 变更的文件列表
             const files = await github.rest.pulls.listFiles({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
+              pull_number: prNumber,
             });
             
             // 禁止自动合并的文件模式（核心业务逻辑）
@@ -52,23 +126,236 @@ jobs:
               console.log('安全检查通过，允许自动合并');
             }
 
+      - name: 检查 CI 是否全部通过
+        if: steps.pr-info.outputs.skip == 'false' && steps.safety-check.outcome == 'success'
+        uses: actions/github-script@v7
+        id: check-ci
+        with:
+          script: |
+            const prNumber = Number('${{ steps.pr-info.outputs.pr_number }}');
+            
+            // 获取 PR 的 head SHA
+            let headSha;
+            if (context.eventName === 'workflow_run') {
+              headSha = context.payload.workflow_run.head_sha;
+            } else {
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+              });
+              headSha = pr.head.sha;
+            }
+            
+            // 必需的 CI 检查（job name，对应 ci.yml 中的 name 字段）
+            const requiredChecks = [
+              '规范检查 & 类型验证',
+              '单元测试 & 覆盖率检查',
+              '构建验证',
+            ];
+            
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: headSha,
+            });
+            
+            console.log('当前 check runs:');
+            checks.check_runs.forEach(c => {
+              console.log(`  - ${c.name}: status=${c.status}, conclusion=${c.conclusion}`);
+            });
+            
+            // 检查所有必需的 CI 是否通过
+            const allPassed = requiredChecks.every(name => {
+              const run = checks.check_runs.find(c => c.name.includes(name));
+              if (!run) {
+                console.log(`未找到 check: ${name}`);
+                return false;
+              }
+              return run.status === 'completed' && run.conclusion === 'success';
+            });
+            
+            if (!allPassed) {
+              // CI 还没全部通过，如果是 pull_request 触发则启用 auto-merge 让 GitHub 等待
+              // 如果是 workflow_run 触发则说明 CI 刚完成但不是全部通过
+              console.log('CI 尚未全部通过');
+              core.setOutput('ci_passed', 'false');
+            } else {
+              console.log('所有必需 CI 检查已通过');
+              core.setOutput('ci_passed', 'true');
+            }
+
       - name: 自动 Approve PR
-        if: steps.safety-check.outcome == 'success'
+        if: >
+          steps.pr-info.outputs.skip == 'false' &&
+          steps.safety-check.outcome == 'success' &&
+          steps.check-ci.outputs.ci_passed == 'true'
         uses: actions/github-script@v7
         with:
           script: |
+            const prNumber = Number('${{ steps.pr-info.outputs.pr_number }}');
+            
+            // 检查是否已有 bot 的 approve（避免重复）
+            const reviews = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            
+            const botApproved = reviews.data.some(r =>
+              r.user.login === 'github-actions[bot]' && r.state === 'APPROVED'
+            );
+            
+            if (botApproved) {
+              console.log('已有 bot approve，跳过');
+              return;
+            }
+            
             // 由 bot 自动批准 PR，满足分支保护规则的 approval 要求
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
+              pull_number: prNumber,
               event: 'APPROVE',
-              body: '🤖 自动批准：安全阀检查通过，变更范围属于低风险类型（文档/配置/测试）。'
+              body: '🤖 自动批准：安全阀检查通过 + CI 全绿，变更属于低风险类型（文档/配置/测试）。'
             });
             console.log('自动 Approve 完成');
 
       - name: 启用自动合并
-        if: steps.safety-check.outcome == 'success'
-        run: gh pr merge ${{ github.event.pull_request.number }} --squash --auto
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: >
+          steps.pr-info.outputs.skip == 'false' &&
+          steps.safety-check.outcome == 'success' &&
+          steps.check-ci.outputs.ci_passed == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number('${{ steps.pr-info.outputs.pr_number }}');
+            
+            // 使用 GraphQL API 启用自动合并（比 gh CLI 更可靠）
+            // 先查询 PR 的 auto-merge 状态
+            const query = `
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    autoMergeRequest {
+                      enabledAt
+                      mergeMethod
+                    }
+                    state
+                  }
+                }
+              }
+            `;
+            
+            const result = await github.graphql(query, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              number: prNumber,
+            });
+            
+            if (result.repository.pullRequest.autoMergeRequest) {
+              console.log('自动合并已启用，跳过');
+              return;
+            }
+            
+            // 启用自动合并
+            const enableMutation = `
+              mutation($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+                enablePullRequestAutoMerge(input: {
+                  pullRequestId: $pullRequestId,
+                  mergeMethod: $mergeMethod
+                }) {
+                  pullRequest {
+                    autoMergeRequest {
+                      enabledAt
+                    }
+                  }
+                }
+              }
+            `;
+            
+            // 获取 PR 的 node_id
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            
+            try {
+              await github.graphql(enableMutation, {
+                pullRequestId: pr.node_id,
+                mergeMethod: 'SQUASH',
+              });
+              console.log('自动合并已启用');
+            } catch (error) {
+              // 如果仓库未启用 auto-merge 功能，会报错
+              console.error(`启用自动合并失败: ${error.message}`);
+              console.error('请确认仓库已开启 Allow auto-merge: Settings → General → Pull Requests');
+              core.setFailed(`启用自动合并失败: ${error.message}`);
+            }
+
+      - name: CI 未通过时也尝试启用 auto-merge（等待 CI 通过后自动合并）
+        if: >
+          steps.pr-info.outputs.skip == 'false' &&
+          steps.safety-check.outcome == 'success' &&
+          steps.check-ci.outputs.ci_passed == 'false' &&
+          github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = Number('${{ steps.pr-info.outputs.pr_number }}');
+            
+            // 先 approve
+            const reviews = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            
+            const botApproved = reviews.data.some(r =>
+              r.user.login === 'github-actions[bot]' && r.state === 'APPROVED'
+            );
+            
+            if (!botApproved) {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                event: 'APPROVE',
+                body: '🤖 自动批准（预审批）：安全阀检查通过，等待 CI 通过后自动合并。'
+              });
+            }
+            
+            // 启用 auto-merge，让 GitHub 在 CI 通过后自动合并
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            
+            const enableMutation = `
+              mutation($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+                enablePullRequestAutoMerge(input: {
+                  pullRequestId: $pullRequestId,
+                  mergeMethod: $mergeMethod
+                }) {
+                  pullRequest {
+                    autoMergeRequest {
+                      enabledAt
+                    }
+                  }
+                }
+              }
+            `;
+            
+            try {
+              await github.graphql(enableMutation, {
+                pullRequestId: pr.node_id,
+                mergeMethod: 'SQUASH',
+              });
+              console.log('预启用自动合并成功，CI 通过后将自动合并');
+            } catch (error) {
+              console.error(`启用自动合并失败: ${error.message}`);
+              console.error('请确认仓库已开启 Allow auto-merge: Settings → General → Pull Requests');
+              // 不 setFailed，因为 CI 还没通过，可以等 workflow_run 触发时再处理
+            }
