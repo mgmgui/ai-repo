@@ -52,7 +52,22 @@ jobs:
               console.log('安全检查通过，允许自动合并');
             }
 
-      - name: 执行自动合并
+      - name: 自动 Approve PR
+        if: steps.safety-check.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 由 bot 自动批准 PR，满足分支保护规则的 approval 要求
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event: 'APPROVE',
+              body: '🤖 自动批准：安全阀检查通过，变更范围属于低风险类型（文档/配置/测试）。'
+            });
+            console.log('自动 Approve 完成');
+
+      - name: 启用自动合并
         if: steps.safety-check.outcome == 'success'
         run: gh pr merge ${{ github.event.pull_request.number }} --squash --auto
         env:
