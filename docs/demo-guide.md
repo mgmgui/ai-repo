@@ -51,7 +51,15 @@ gh pr create --title "docs: 更新 README" --body "$(cat .github/pull_request_te
 - [x] **Require linear history**
 - [x] **Block force pushes**
 
-### 2.3 Labels 配置
+### 2.3 GitHub Auto-merge 配置
+
+进入 GitHub 仓库 **Settings → General → Pull Requests**，确保勾选：
+
+- [x] **Allow auto-merge**（允许自动合并）
+
+> 这是 GitHub 原生功能，启用后用户可在 PR 页面点击 "Enable auto-merge" 按钮，或在 CI + Approve 全部满足后由 GitHub 自动执行合并。
+
+### 2.4 Labels 配置
 
 创建 `auto-merge-eligible` 标签，用于标记低风险 PR 触发自动合并流程。
 
@@ -90,11 +98,13 @@ gh pr create \
 ```
 L1 pre-commit ✅ ESLint + Prettier 通过
      ↓
+auto-merge.yml ✅ 安全阀检查无核心文件 → 自动 Approve + 启用 auto-merge
+     ↓
 L3 AI 审查 ✅ 发布评论报告（代码质量 10/10，无 HIGH 问题）
      ↓
 L4 CI 全绿 ✅ lint + typecheck + test + build
      ↓
-auto-merge.yml ✅ 安全阀检查无核心文件 → 自动 squash merge
+GitHub 原生 ✅ 所有条件满足 → 自动 squash merge
 ```
 
 **人工介入：0 次**
