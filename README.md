@@ -236,7 +236,7 @@ Issue/需求 → AI 规划（只读分析）→ 人工确认计划
 
 ## 参考资料
 
-- 需求设计参考：[需求.md](./需求.md)
+- 需求设计参考：[需求.md](./docs/需求.md)
 - 贡献规范：[CONTRIBUTING.md](./CONTRIBUTING.md)
 - AI 审查脚本：[scripts/ai-review.js](./scripts/ai-review.js)
-- 演示方案：[demo-guide.md](./demo-guide.md)
+- 演示方案：[demo-guide.md](./docs/demo-guide.md)
