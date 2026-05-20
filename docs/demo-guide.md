@@ -57,9 +57,17 @@ gh pr create --title "docs: 更新 README" --body "$(cat .github/pull_request_te
 
 - [x] **Allow auto-merge**（允许自动合并）
 
-> 这是 GitHub 原生功能，启用后用户可在 PR 页面点击 "Enable auto-merge" 按钮，或在 CI + Approve 全部满足后由 GitHub 自动执行合并。
+> 这是 GitHub 原生功能，启用后 `gh pr merge --auto` 命令可注册 auto-merge 意图，CI + Approve 全部满足后 GitHub 自动执行合并。
 
-### 2.4 Labels 配置
+### 2.4 Actions Approvals 配置
+
+进入 GitHub 仓库 **Settings → Actions → General**，在底部找到并勾选：
+
+- [x] **Allow GitHub Actions to create approvals**
+
+> 这是关键配置！默认情况下，GitHub Actions bot（`github-actions[bot]`）使用 `GITHUB_TOKEN` 提交的 Approve 不计入分支保护规则要求的 approval 数量。启用此选项后，bot 的 Approve 才能满足 "Required approvals: 1" 的要求，低风险 PR 才能真正零人工介入自动合并。
+
+### 2.5 Labels 配置
 
 创建 `auto-merge-eligible` 标签，用于标记低风险 PR 触发自动合并流程。
 
@@ -98,7 +106,7 @@ gh pr create \
 ```
 L1 pre-commit ✅ ESLint + Prettier 通过
      ↓
-auto-merge.yml ✅ 安全阀检查无核心文件 → 自动 Approve + 启用 auto-merge
+auto-merge.yml ✅ 安全阀检查无核心文件 → 等待 CI 全绿 → 自动 Approve → 启用 auto-merge
      ↓
 L3 AI 审查 ✅ 发布评论报告（代码质量 10/10，无 HIGH 问题）
      ↓
@@ -112,6 +120,7 @@ GitHub 原生 ✅ 所有条件满足 → 自动 squash merge
 **验证点**：
 - [ ] PR 创建后自动触发 AI 审查，评论中出现结构化评分报告
 - [ ] CI 三个 Job 全部通过
+- [ ] auto-merge.yml 安全阀通过后自动 Approve PR
 - [ ] 自动合并成功，无需人工 Approve
 
 ---
