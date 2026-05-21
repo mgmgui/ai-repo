@@ -284,7 +284,7 @@ jobs:
             
             // 带指数退避的重试：应对 PR "unstable" 等瞬时状态
             // unstable 常见于 CI 刚完成、PR 状态尚未稳定的窗口期
-            const maxRetries = 5;
+            const maxRetries = 8;
             const isTransient = (msg) =>
               /unstable/i.test(msg) ||
               /Base branch was modified/i.test(msg) ||
@@ -303,7 +303,8 @@ jobs:
               } catch (error) {
                 lastError = error;
                 if (attempt < maxRetries && isTransient(error.message)) {
-                  const delayMs = 3000 * Math.pow(2, attempt - 1); // 3s,6s,12s,24s
+                  // 退避: 3s,6s,12s,24s,48s,60s,60s（上限60s）
+                  const delayMs = Math.min(3000 * Math.pow(2, attempt - 1), 60000);
                   console.log(
                     `PR 状态瞬时不稳定（${error.message.split('\n')[0]}），` +
                     `${delayMs}ms 后重试 (${attempt}/${maxRetries - 1})`
@@ -377,7 +378,7 @@ jobs:
             
             try {
               // 带指数退避的重试：与上方"启用自动合并"步骤保持一致策略
-              const maxRetries = 5;
+              const maxRetries = 8;
               const isTransient = (msg) =>
                 /unstable/i.test(msg) ||
                 /Base branch was modified/i.test(msg) ||
@@ -396,7 +397,8 @@ jobs:
                 } catch (err) {
                   lastError = err;
                   if (attempt < maxRetries && isTransient(err.message)) {
-                    const delayMs = 3000 * Math.pow(2, attempt - 1);
+                    // 退避: 3s,6s,12s,24s,48s,60s,60s（上限60s）
+                    const delayMs = Math.min(3000 * Math.pow(2, attempt - 1), 60000);
                     console.log(
                       `PR 状态瞬时不稳定（${err.message.split('\n')[0]}），` +
                       `${delayMs}ms 后重试 (${attempt}/${maxRetries - 1})`
