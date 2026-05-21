@@ -244,4 +244,3 @@ Issue/需求 → AI 规划（只读分析）→ 人工确认计划
 ## 更新历史
 - 修复auto merge
 - gh pr merge <PR_NUMBER> --auto --squash
-- test
