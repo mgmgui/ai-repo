@@ -47,7 +47,10 @@ gh pr create --title "docs: 更新 README" --body "$(cat .github/pull_request_te
   - Allowed merge methods：仅 **Squash merge**
 - [x] **Require status checks to pass**
   - [x] Require branches to be up to date before merging
-  - Required checks：`规范检查 & 类型验证` / `单元测试 & 覆盖率检查` / `构建验证`
+  - Required checks：
+    - `CI - 代码质量验证 / 规范检查 & 类型验证`
+    - `CI - 代码质量验证 / 单元测试 & 覆盖率检查`
+    - `CI - 代码质量验证 / 构建验证`
 - [x] **Require linear history**
 - [x] **Block force pushes**
 
@@ -62,6 +65,8 @@ gh pr create --title "docs: 更新 README" --body "$(cat .github/pull_request_te
 ### 2.4 Actions Approvals 配置
 
 进入 GitHub 仓库 **Settings → Actions → General**，在底部找到并勾选：
+
+- Workflow permissions：选择 **Read and write permissions**
 
 - [x] **Allow GitHub Actions to create approvals**
 
@@ -244,9 +249,9 @@ gh pr create \
 ```
 第1层 PR → L3 AI 审查 + L4 CI → 人工 Approve → Merge
                                               ↓
-第2层 PR → 自动 rebase → L3 AI 审查 + L4 CI → 人工 Approve → Merge
+第2层 PR → 自动换基到 main（Stacked PR 自动换基）→ L3 AI 审查 + L4 CI → 人工 Approve → Merge
                                                            ↓
-第3层 PR → 自动 rebase → L3 AI 审查 + L4 CI → 人工 Approve → Merge
+第3层 PR → 自动换基到 main（Stacked PR 自动换基）→ L3 AI 审查 + L4 CI → 人工 Approve → Merge
 ```
 
 **人工介入：3 次 Approve（每层 1 次，但每次聚焦单一逻辑单元）**
@@ -254,7 +259,7 @@ gh pr create \
 **验证点**：
 - [ ] 每个 PR diff < 400 行
 - [ ] 每层独立触发 AI 审查和 CI
-- [ ] 上层 merge 后，下层自动 rebase 到 main
+- [ ] 上层 merge 后，下层自动换基到 main（并尝试自动 Update branch 保持 up-to-date）
 - [ ] 单层出问题可独立回滚，不影响已合并的其他层
 - [ ] 人工每次只需审查一个逻辑单元，认知负荷显著降低
 
