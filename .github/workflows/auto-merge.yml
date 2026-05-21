@@ -15,10 +15,11 @@ on:
     branches: [main]
 
   # 触发方式 2：CI workflow 完成时触发（关键！确保 CI 通过后能执行自动合并）
+  # 注意：不能用 branches 过滤——workflow_run.branches 匹配的是被监听 workflow 的 head 分支，
+  # 而 CI 是跑在 PR 的 feature 分支上的，加 branches:[main] 会导致永远不触发。
   workflow_run:
     workflows: ["CI - 代码质量验证"]
     types: [completed]
-    branches: [main]
 
 jobs:
   auto-merge:
@@ -355,7 +356,13 @@ jobs:
               });
               console.log('预启用自动合并成功，CI 通过后将自动合并');
             } catch (error) {
-              console.error(`启用自动合并失败: ${error.message}`);
-              console.error('请确认仓库已开启 Allow auto-merge: Settings → General → Pull Requests');
-              // 不 setFailed，因为 CI 还没通过，可以等 workflow_run 触发时再处理
+              // 显式失败：把异常暴露出来，避免被静默吞掉导致排查困难
+              core.setFailed(
+                `预启用自动合并失败: ${error.message}\n` +
+                `常见原因：\n` +
+                `  1. 仓库未开启 Allow auto-merge (Settings → General → Pull Requests)\n` +
+                `  2. 未开启 Allow GitHub Actions to create approvals (Settings → Actions → General)\n` +
+                `  3. branch protection 要求 approval，但 bot approve 暂未生效\n` +
+                `兜底：手工执行 gh pr merge <number> --auto --squash`
+              );
             }
