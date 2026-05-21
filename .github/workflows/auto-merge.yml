@@ -282,17 +282,43 @@ jobs:
               pull_number: prNumber,
             });
             
-            try {
-              await github.graphql(enableMutation, {
-                pullRequestId: pr.node_id,
-                mergeMethod: 'SQUASH',
-              });
-              console.log('自动合并已启用');
-            } catch (error) {
-              // 如果仓库未启用 auto-merge 功能，会报错
-              console.error(`启用自动合并失败: ${error.message}`);
+            // 带指数退避的重试：应对 PR "unstable" 等瞬时状态
+            // unstable 常见于 CI 刚完成、PR 状态尚未稳定的窗口期
+            const maxRetries = 5;
+            const isTransient = (msg) =>
+              /unstable/i.test(msg) ||
+              /Base branch was modified/i.test(msg) ||
+              /not in the correct state/i.test(msg);
+
+            let lastError = null;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+              try {
+                await github.graphql(enableMutation, {
+                  pullRequestId: pr.node_id,
+                  mergeMethod: 'SQUASH',
+                });
+                console.log(`自动合并已启用（第 ${attempt} 次尝试）`);
+                lastError = null;
+                break;
+              } catch (error) {
+                lastError = error;
+                if (attempt < maxRetries && isTransient(error.message)) {
+                  const delayMs = 3000 * Math.pow(2, attempt - 1); // 3s,6s,12s,24s
+                  console.log(
+                    `PR 状态瞬时不稳定（${error.message.split('\n')[0]}），` +
+                    `${delayMs}ms 后重试 (${attempt}/${maxRetries - 1})`
+                  );
+                  await new Promise((r) => setTimeout(r, delayMs));
+                } else {
+                  break;
+                }
+              }
+            }
+
+            if (lastError) {
+              console.error(`启用自动合并失败: ${lastError.message}`);
               console.error('请确认仓库已开启 Allow auto-merge: Settings → General → Pull Requests');
-              core.setFailed(`启用自动合并失败: ${error.message}`);
+              core.setFailed(`启用自动合并失败: ${lastError.message}`);
             }
 
       - name: CI 未通过时也尝试启用 auto-merge（等待 CI 通过后自动合并）
@@ -350,11 +376,41 @@ jobs:
             `;
             
             try {
-              await github.graphql(enableMutation, {
-                pullRequestId: pr.node_id,
-                mergeMethod: 'SQUASH',
-              });
-              console.log('预启用自动合并成功，CI 通过后将自动合并');
+              // 带指数退避的重试：与上方"启用自动合并"步骤保持一致策略
+              const maxRetries = 5;
+              const isTransient = (msg) =>
+                /unstable/i.test(msg) ||
+                /Base branch was modified/i.test(msg) ||
+                /not in the correct state/i.test(msg);
+
+              let lastError = null;
+              for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                  await github.graphql(enableMutation, {
+                    pullRequestId: pr.node_id,
+                    mergeMethod: 'SQUASH',
+                  });
+                  console.log(`预启用自动合并成功（第 ${attempt} 次尝试），CI 通过后将自动合并`);
+                  lastError = null;
+                  break;
+                } catch (err) {
+                  lastError = err;
+                  if (attempt < maxRetries && isTransient(err.message)) {
+                    const delayMs = 3000 * Math.pow(2, attempt - 1);
+                    console.log(
+                      `PR 状态瞬时不稳定（${err.message.split('\n')[0]}），` +
+                      `${delayMs}ms 后重试 (${attempt}/${maxRetries - 1})`
+                    );
+                    await new Promise((r) => setTimeout(r, delayMs));
+                  } else {
+                    break;
+                  }
+                }
+              }
+
+              if (lastError) {
+                throw lastError;
+              }
             } catch (error) {
               // 显式失败：把异常暴露出来，避免被静默吞掉导致排查困难
               core.setFailed(
@@ -363,6 +419,7 @@ jobs:
                 `  1. 仓库未开启 Allow auto-merge (Settings → General → Pull Requests)\n` +
                 `  2. 未开启 Allow GitHub Actions to create approvals (Settings → Actions → General)\n` +
                 `  3. branch protection 要求 approval，但 bot approve 暂未生效\n` +
+                `  4. PR 长时间处于 unstable 状态（已自动重试 5 次仍失败）\n` +
                 `兜底：手工执行 gh pr merge <number> --auto --squash`
               );
             }
