@@ -69,7 +69,13 @@ gh pr create --title "docs: 更新 README" --body "$(cat .github/pull_request_te
 
 ### 2.5 Labels 配置
 
-创建 `auto-merge-eligible` 标签，用于标记低风险 PR 触发自动合并流程。
+创建 `auto-merge-eligible` 标签，用于标记低风险 PR 触发自动合并流程：
+
+```bash
+gh label create "auto-merge-eligible" --description "低风险 PR，触发自动合并流程" --color "0075ca"
+```
+
+> 注意：`gh pr create --label` 要求标签必须预先在仓库中存在，否则会报 `could not add label: 'auto-merge-eligible' not found` 错误。请在首次使用前执行上述命令创建标签。
 
 ---
 
