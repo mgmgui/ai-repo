@@ -242,3 +242,4 @@ Issue/需求 → AI 规划（只读分析）→ 人工确认计划
 - 演示方案：[demo-guide.md](./docs/demo-guide.md)
 
 ## 更新历史
+- 修复auto merge
