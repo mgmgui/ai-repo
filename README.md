@@ -169,6 +169,24 @@ npm test            # 运行测试
 npm run build       # 构建验证
 ```
 
+### 5. 配置 Auto-merge（推荐）
+
+进入 GitHub 仓库 **Settings → General → Pull Requests**，确保勾选：
+
+- [x] **Allow auto-merge** — 启用后低风险 PR 经 CI + AI 审查通过后可自动合并
+
+同时在 **Settings → Actions → General** 底部勾选：
+
+- [x] **Allow GitHub Actions to create approvals** — 让 bot 的 Approve 满足分支保护规则
+
+### 6. 创建标签（首次使用前）
+
+```bash
+gh label create "auto-merge-eligible" --description "低风险 PR，触发自动合并流程" --color "0075ca"
+```
+
+> 标签用于标记低风险 PR（文档/配置/测试等），触发自动合并流程。
+
 ---
 
 ## AIR Cycle 工作流详解
