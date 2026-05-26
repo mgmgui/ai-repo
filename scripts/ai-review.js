@@ -101,11 +101,15 @@ async function callOpenAI(prompt) {
     const url = new URL(`${baseUrl}/chat/completions`);
 
     const body = JSON.stringify({
-      model: 'qwen3.5-35b-a3b',
+      model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 2000,
       temperature: 0.2,
     });
+
+    console.log(`[AI-REVIEW] 请求 URL: ${url.toString()}`);
+    console.log(`[AI-REVIEW] 请求模型: deepseek-v4-flash`);
+    console.log(`[AI-REVIEW] Prompt 长度: ${prompt.length} 字符`);
 
     const options = {
       hostname: url.hostname,
@@ -120,13 +124,50 @@ async function callOpenAI(prompt) {
 
     const req = https.request(options, (res) => {
       let data = '';
+      console.log(`[AI-REVIEW] API 响应状态码: ${res.statusCode}`);
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
+          // 记录原始响应，便于排查问题（截断过长内容）
+          const logData = data.length > 2000 ? data.substring(0, 2000) + '...(truncated)' : data;
+          console.log(`[AI-REVIEW] API 原始响应: ${logData}`);
+
           const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.message?.content;
+
+          // 检查 API 是否返回了错误对象
+          if (parsed.error) {
+            const errMsg = parsed.error.message || parsed.error.msg || JSON.stringify(parsed.error);
+            console.error(`[AI-REVIEW] API 返回错误: code=${parsed.error.code || 'N/A'}, message=${errMsg}`);
+            reject(new Error(`API 返回错误: ${errMsg}`));
+            return;
+          }
+
+          // 检查 HTTP 状态码
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`API 返回非 2xx 状态码: ${res.statusCode}, 响应: ${data}`));
+            return;
+          }
+
+          // 检查 choices 数组
+          if (!parsed.choices || parsed.choices.length === 0) {
+            console.error(`[AI-REVIEW] API 返回空 choices, 完整响应: ${JSON.stringify(parsed)}`);
+            reject(new Error(`API 返回空 choices，可能是模型名无效或服务异常`));
+            return;
+          }
+
+          const choice = parsed.choices[0];
+          const content = choice.message?.content;
+          const finishReason = choice.finish_reason;
+
+          console.log(`[AI-REVIEW] finish_reason: ${finishReason}, content 长度: ${content?.length || 0}`);
+
+          if (finishReason === 'length') {
+            console.warn(`[AI-REVIEW] 警告: 输出因 token 超限被截断 (finish_reason=length)`);
+          }
+
           resolve(content || '⚠️ API 返回内容为空');
-        } catch {
+        } catch (parseErr) {
+          console.error(`[AI-REVIEW] JSON 解析失败, 原始数据: ${data}`);
           reject(new Error(`API 响应解析失败: ${data}`));
         }
       });
