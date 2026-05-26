@@ -31,3 +31,13 @@ export function isNonEmpty(value: string): boolean {
 export function isInRange(value: number, min: number, max: number): boolean {
   return value >= min && value <= max;
 }
+
+/**
+ * 验证中国大陆手机号格式
+ * @param phone - 待验证的手机号字符串
+ * @returns 是否合法
+ */
+export function validatePhone(phone: string): boolean {
+  const phoneRegex = /^1[3-9]\d{9}$/;
+  return phoneRegex.test(phone);
+}
